@@ -547,20 +547,54 @@
                 } catch (e) {
                     console.log('iOS: continuous mode not supported');
                 }
+                // iOSでは中間結果も取得する
+                recognition.interimResults = true;
             } else {
                 recognition.continuous = true; // 継続的に音声認識を行う（自動停止しない）
+                // iOSでは中間結果も取得する（iOS Safariで音声認識が動作しない問題を解決）
+            if (isIOS) {
+                recognition.interimResults = true;
+            } else {
+                recognition.interimResults = false;
             }
-            
-            recognition.interimResults = false;
+            }
 
             recognition.onresult = (event) => {
-                // 最新の最終結果を取得
-                for (let i = event.results.length - 1; i >= 0; i--) {
-                    if (event.results[i].isFinal) {
-                        const transcript = event.results[i][0].transcript;
-                        handleVoiceInput(transcript);
-                        break;
+                console.log('音声認識結果:', event);
+                let transcript = '';
+                
+                // iOS Safariでは結果の取得方法が異なる可能性があるため、複数の方法を試す
+                if (event.results && event.results.length > 0) {
+                    // 最新の最終結果を取得
+                    for (let i = event.results.length - 1; i >= 0; i--) {
+                        if (event.results[i].isFinal) {
+                            transcript = event.results[i][0].transcript;
+                            break;
+                        }
                     }
+                    
+                    // 最終結果が見つからない場合、最後の結果を使用
+                    if (!transcript && event.results.length > 0) {
+                        const lastResult = event.results[event.results.length - 1];
+                        if (lastResult && lastResult.length > 0) {
+                            transcript = lastResult[0].transcript;
+                        }
+                    }
+                }
+                
+                // iOS Safari用：直接transcriptを取得
+                if (!transcript && event.results && event.results.length > 0) {
+                    const lastIndex = event.results.length - 1;
+                    if (event.results[lastIndex] && event.results[lastIndex][0]) {
+                        transcript = event.results[lastIndex][0].transcript;
+                    }
+                }
+                
+                if (transcript && transcript.trim().length > 0) {
+                    console.log('抽出されたテキスト:', transcript);
+                    handleVoiceInput(transcript);
+                } else {
+                    console.warn('テキストが抽出できませんでした:', event);
                 }
             };
 
