@@ -530,9 +530,27 @@
 
             // SpeechRecognitionの初期化
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechRecognition) {
+                alert('このブラウザは音声認識に対応していません。\nChrome、Edge、Safari（iOS 14.5以降）をご使用ください。');
+                return;
+            }
+            
             recognition = new SpeechRecognition();
             recognition.lang = 'ja-JP';
-            recognition.continuous = true; // 継続的に音声認識を行う（自動停止しない）
+            
+            // iOS Safari用の設定
+            const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
+            if (isIOS) {
+                // iOSではcontinuousがサポートされていない場合があるため、falseに設定
+                try {
+                    recognition.continuous = false;
+                } catch (e) {
+                    console.log('iOS: continuous mode not supported');
+                }
+            } else {
+                recognition.continuous = true; // 継続的に音声認識を行う（自動停止しない）
+            }
+            
             recognition.interimResults = false;
 
             recognition.onresult = (event) => {
@@ -547,9 +565,35 @@
             };
 
             recognition.onerror = (event) => {
-                console.error('音声認識エラー:', event.error);
+                console.error('音声認識エラー:', event.error, event);
+                let errorMessage = '音声認識でエラーが発生しました。';
+                
+                // エラーの種類に応じてメッセージを変更
+                switch(event.error) {
+                    case 'no-speech':
+                        errorMessage = '音声が検出されませんでした。もう一度お試しください。';
+                        break;
+                    case 'audio-capture':
+                        errorMessage = 'マイクへのアクセスができません。マイクの許可を確認してください。';
+                        break;
+                    case 'not-allowed':
+                        errorMessage = 'マイクの使用が許可されていません。ブラウザの設定でマイクの許可を有効にしてください。';
+                        break;
+                    case 'network':
+                        errorMessage = 'ネットワークエラーが発生しました。インターネット接続を確認してください。';
+                        break;
+                    case 'aborted':
+                        errorMessage = '音声認識が中断されました。';
+                        break;
+                    case 'service-not-allowed':
+                        errorMessage = '音声認識サービスが利用できません。Safariの設定で音声認識を有効にしてください。';
+                        break;
+                    default:
+                        errorMessage = `音声認識エラー: ${event.error}。もう一度お試しください。`;
+                }
+                
                 stopRecording();
-                showStatus('音声認識でエラーが発生しました。もう一度お試しください。', 'error');
+                showStatus(errorMessage, 'error');
             };
 
             recognition.onend = () => {
@@ -557,12 +601,23 @@
                 const stopButton = document.getElementById('stop-button');
                 if (stopButton && stopButton.style.display !== 'none') {
                     // まだ録音中の場合、自動的に再開
-                    try {
-                        recognition.start();
-                    } catch (e) {
-                        // 既に開始されている場合は無視
-                        console.log('音声認識の再開:', e);
-                    }
+                    // iOSでは即座に再開するとエラーになる可能性があるため、少し待つ
+                    setTimeout(() => {
+                        try {
+                            if (recognition && stopButton.style.display !== 'none') {
+                                recognition.start();
+                            }
+                        } catch (e) {
+                            // 既に開始されている場合やエラーの場合は無視
+                            console.log('音声認識の再開:', e);
+                            // エラーの場合は手動で停止状態にする
+                            if (e.name === 'InvalidStateError' || e.message.includes('already started')) {
+                                // 既に開始されている場合は問題なし
+                            } else {
+                                stopRecording();
+                            }
+                        }
+                    }, 100);
                 } else {
                     // 停止ボタンが表示されていない場合は、ボタンの状態を更新
                     const startButton = document.getElementById('voice-button');
