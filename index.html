@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>レシート家計簿システム</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.4/dist/tesseract.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/browser-image-compression@2.0.2/dist/browser-image-compression.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -381,9 +383,9 @@
             <div class="upload-area" id="upload-area" onclick="document.getElementById('file-input').click()">
                 <div style="font-size: 3rem; margin-bottom: 20px;">📄</div>
                 <div style="font-size: 1.2rem; font-weight: 600; margin-bottom: 10px;">画像を選択またはドラッグ&ドロップ</div>
-                <div style="color: #6b7280;">PNG、JPG、JPEG形式に対応</div>
+                <div style="color: #6b7280;">PNG、JPG、JPEG形式に対応（HEICは一部ブラウザで制限あり）</div>
             </div>
-            <input type="file" id="file-input" accept="image/*">
+            <input type="file" id="file-input" accept="image/*,.heic,.heif">
             
             <div style="text-align: center; margin: 20px 0;">
                 <button class="camera-button" onclick="startCamera()">📷 カメラで撮影</button>
@@ -451,8 +453,15 @@
         // ページ読み込み時に保存されたデータを読み込む
         window.addEventListener('DOMContentLoaded', () => {
             // #region agent log
-            fetch('http://127.0.0.1:7242/ingest/d412bb46-ee1e-45d7-a8de-b4320e5d143a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:452',message:'DOMContentLoaded event fired',data:{userAgent:navigator.userAgent,url:window.location.href,protocol:window.location.protocol},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+            fetch('http://127.0.0.1:7242/ingest/d412bb46-ee1e-45d7-a8de-b4320e5d143a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:452',message:'DOMContentLoaded event fired',data:{userAgent:navigator.userAgent,url:window.location.href,protocol:window.location.protocol,tesseractAvailable:typeof Tesseract !== 'undefined'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
             // #endregion
+            
+            // Tesseract.jsの読み込み確認
+            if (typeof Tesseract === 'undefined') {
+                console.error('Tesseract.jsが読み込まれていません');
+                alert('Tesseract.jsの読み込みに失敗しました。インターネット接続を確認してください。');
+            }
+            
             loadReceipts();
             updateReceiptList();
         });
@@ -492,7 +501,9 @@
             e.preventDefault();
             uploadArea.classList.remove('dragover');
             const file = e.dataTransfer.files[0];
-            if (file && file.type.startsWith('image/')) {
+            if (file && (file.type.startsWith('image/') || 
+                         file.name.toLowerCase().endsWith('.heic') || 
+                         file.name.toLowerCase().endsWith('.heif'))) {
                 handleFile(file);
             }
         });
@@ -500,10 +511,83 @@
         // ファイル処理
         async function handleFile(file) {
             const preview = document.getElementById('preview');
-            preview.src = URL.createObjectURL(file);
+            
+            // HEIC形式の場合は変換
+            let processedFile = file;
+            if (file.name.toLowerCase().endsWith('.heic') || 
+                file.name.toLowerCase().endsWith('.heif') ||
+                file.type === 'image/heic' || 
+                file.type === 'image/heif') {
+                
+                try {
+                    const progressContainer = document.getElementById('progress-container');
+                    const progressFill = document.getElementById('progress-fill');
+                    progressContainer.classList.add('active');
+                    progressFill.textContent = 'HEIC形式を変換中...';
+                    
+                    // heic2anyでJPEGに変換
+                    // 注意: 一部のブラウザではHEIC形式をサポートしていない場合があります
+                    let convertedBlob;
+                    try {
+                        // heic2anyでJPEGに変換を試みる
+                        convertedBlob = await heic2any({
+                            blob: file,
+                            toType: 'image/jpeg',
+                            quality: 0.9
+                        });
+                    } catch (e1) {
+                        // エラーメッセージを確認
+                        const errorMsg = e1.message || e1.toString();
+                        if (errorMsg.includes('ERR_LIBHEIF') || errorMsg.includes('format not supported')) {
+                            throw new Error('このブラウザではHEIC形式をサポートしていません。\n\n解決方法:\n1. iPhoneの設定で「カメラ」→「フォーマット」→「互換性優先」に変更してから撮影\n2. または、JPEG/PNG形式の画像を使用してください。\n3. Safariブラウザ（iPhone）ではHEIC形式がサポートされる場合があります。');
+                        } else {
+                            throw e1;
+                        }
+                    }
+                    
+                    // 配列が返される場合があるため、最初の要素を取得
+                    const blob = Array.isArray(convertedBlob) ? convertedBlob[0] : convertedBlob;
+                    
+                    // Blobが正しく変換されているか確認
+                    if (!blob || blob.size === 0) {
+                        throw new Error('HEIC形式の変換結果が無効です。');
+                    }
+                    
+                    processedFile = new File([blob], file.name.replace(/\.heic?$/i, '.jpg'), { type: blob.type || 'image/jpeg' });
+                    
+                    progressContainer.classList.remove('active');
+                    
+                    // 変換後のファイルが正しく読み込めるか確認
+                    const testImg = new Image();
+                    await new Promise((resolve, reject) => {
+                        testImg.onload = resolve;
+                        testImg.onerror = () => reject(new Error('変換後の画像が読み込めませんでした。'));
+                        testImg.src = URL.createObjectURL(blob);
+                    });
+                    URL.revokeObjectURL(testImg.src);
+                } catch (error) {
+                    console.error('HEIC変換エラー:', error);
+                    progressContainer.classList.remove('active');
+                    
+                    let errorMsg = 'HEIC形式の変換に失敗しました。\n\n';
+                    if (error.message) {
+                        errorMsg += error.message;
+                    } else {
+                        errorMsg += 'このブラウザではHEIC形式をサポートしていない可能性があります。\n\n';
+                        errorMsg += '解決方法:\n';
+                        errorMsg += '1. iPhoneの設定で「カメラ」→「フォーマット」→「互換性優先」に変更\n';
+                        errorMsg += '2. または、JPEG/PNG形式の画像を使用してください。';
+                    }
+                    
+                    alert(errorMsg);
+                    return;
+                }
+            }
+            
+            preview.src = URL.createObjectURL(processedFile);
             preview.classList.remove('hidden');
             
-            await processImage(file);
+            await processImage(processedFile);
         }
 
         // カメラ開始
@@ -551,42 +635,152 @@
 
         // OCR処理
         async function processImage(file) {
+            // #region agent log
+            fetch('http://127.0.0.1:7242/ingest/d412bb46-ee1e-45d7-a8de-b4320e5d143a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:553',message:'processImage called',data:{fileName:file.name,fileSize:file.size,fileType:file.type,tesseractAvailable:typeof Tesseract !== 'undefined'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+            // #endregion
+            
             const progressContainer = document.getElementById('progress-container');
             const progressFill = document.getElementById('progress-fill');
             progressContainer.classList.add('active');
+            progressFill.style.width = '0%';
+            progressFill.textContent = '初期化中...';
 
             try {
+                // #region agent log
+                fetch('http://127.0.0.1:7242/ingest/d412bb46-ee1e-45d7-a8de-b4320e5d143a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:565',message:'Creating Tesseract worker',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+                // #endregion
+                
+                progressFill.textContent = 'Tesseract.jsを読み込み中...';
                 const worker = await Tesseract.createWorker('jpn+eng');
                 
-                const { data } = await worker.recognize(file, {
-                    logger: (m) => {
-                        if (m.status === 'recognizing text') {
-                            const progress = Math.round(m.progress * 100);
-                            progressFill.style.width = progress + '%';
-                            progressFill.textContent = progress + '%';
-                        }
-                    },
-                });
-
+                // #region agent log
+                fetch('http://127.0.0.1:7242/ingest/d412bb46-ee1e-45d7-a8de-b4320e5d143a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:570',message:'Worker created, starting recognition',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+                // #endregion
+                
+                // 進捗表示用の変数を先に定義（エラー時にもアクセスできるように）
+                let progressInterval = null;
+                let currentProgress = 0;
+                let imageUrl = null;
+                
+                try {
+                    progressFill.textContent = '画像を準備中...';
+                    
+                    // ファイルが正しく読み込めるか確認
+                    if (!file || file.size === 0) {
+                        throw new Error('画像ファイルが空です');
+                    }
+                    
+                    // ファイルタイプを確認
+                    const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/bmp', 'image/webp'];
+                    if (!validTypes.includes(file.type.toLowerCase()) && !file.name.match(/\.(jpg|jpeg|png|gif|bmp|webp)$/i)) {
+                        throw new Error('サポートされていない画像形式です。JPEG、PNG、GIF、BMP、WebP形式を使用してください。');
+                    }
+                    
+                    progressFill.textContent = '画像を解析中...';
+                    
+                    // 進捗表示のアニメーション（実際の進捗は取得できないため、アニメーションで表示）
+                    progressInterval = setInterval(() => {
+                        currentProgress = Math.min(currentProgress + 2, 90);
+                        progressFill.style.width = currentProgress + '%';
+                        progressFill.textContent = currentProgress + '%';
+                    }, 200);
+                    
+                    // Fileオブジェクトを直接Tesseract.jsに渡す（最も確実な方法）
+                    // Tesseract.jsはFile、Blob、ImageData、Canvas、Image要素を受け付ける
+                    const { data } = await worker.recognize(file);
+                    
+                    // 進捗アニメーションを停止
+                    if (progressInterval) {
+                        clearInterval(progressInterval);
+                        progressInterval = null;
+                    }
+                    progressFill.style.width = '100%';
+                    progressFill.textContent = '100%';
+                    
+                    // #region agent log
+                    fetch('http://127.0.0.1:7242/ingest/d412bb46-ee1e-45d7-a8de-b4320e5d143a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:595',message:'Recognition completed',data:{textLength:data.text.length,confidence:data.confidence},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+                    // #endregion
+                    
                 await worker.terminate();
-
+                
                 const text = data.text;
-                const imageUrl = URL.createObjectURL(file);
+                // 表示用の画像URLを作成
+                imageUrl = URL.createObjectURL(file);
+                const imageUrlForDisplay = imageUrl;
+                    
+                    // 情報抽出
+                    progressFill.textContent = '情報を抽出中...';
+                    const receipt = extractReceiptInfo(text, imageUrlForDisplay);
+                    receipts.unshift(receipt);
+                    saveReceipts();
+                    updateReceiptList();
+                    switchTab('book');
+                    
+                    progressContainer.classList.remove('active');
+                    document.getElementById('preview').classList.add('hidden');
+                    document.getElementById('file-input').value = '';
+                    return; // 正常終了
+                } catch (imageError) {
+                    // 画像読み込みエラーを処理
+                    throw imageError;
+                }
+                
+                // 進捗アニメーションを停止
+                if (progressInterval) {
+                    clearInterval(progressInterval);
+                }
+                progressFill.style.width = '100%';
+                progressFill.textContent = '100%';
 
-                // 情報抽出
-                const receipt = extractReceiptInfo(text, imageUrl);
-                receipts.unshift(receipt);
-                saveReceipts();
-                updateReceiptList();
-                switchTab('book');
-
-                progressContainer.classList.remove('active');
-                document.getElementById('preview').classList.add('hidden');
-                document.getElementById('file-input').value = '';
             } catch (error) {
+                // #region agent log
+                fetch('http://127.0.0.1:7242/ingest/d412bb46-ee1e-45d7-a8de-b4320e5d143a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:615',message:'OCR processing error',data:{errorMessage:error.message,errorStack:error.stack,errorName:error.name},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+                // #endregion
+                
                 console.error('OCR処理エラー:', error);
-                alert('処理中にエラーが発生しました: ' + error.message);
+                
+                // 進捗アニメーションを停止（定義されている場合のみ）
+                if (typeof progressInterval !== 'undefined' && progressInterval !== null) {
+                    clearInterval(progressInterval);
+                }
+                
+                // オブジェクトURLをクリーンアップ
+                if (typeof imageUrl !== 'undefined' && imageUrl !== null) {
+                    try {
+                        URL.revokeObjectURL(imageUrl);
+                    } catch (e) {
+                        // 既にクリーンアップされている場合は無視
+                    }
+                }
+                
+                progressFill.textContent = 'エラーが発生しました';
+                
+                // エラーメッセージを詳細に表示
+                let errorMsg = '処理中にエラーが発生しました。\n\n';
+                if (error.message) {
+                    if (error.message.includes('read image') || error.message.includes('読み込めません')) {
+                        errorMsg += '画像ファイルが読み込めませんでした。\n\n';
+                        errorMsg += '以下の点を確認してください：\n';
+                        errorMsg += '・画像ファイルが破損していないか\n';
+                        errorMsg += '・サポートされている形式か（JPG、PNG、GIF、BMPなど）\n';
+                        errorMsg += '・ファイルサイズが大きすぎないか（10MB以下推奨）\n';
+                        errorMsg += '・画像が正しく表示できるか\n';
+                    } else {
+                        errorMsg += error.message;
+                    }
+                } else {
+                    errorMsg += error.toString();
+                }
+                
+                alert(errorMsg);
                 progressContainer.classList.remove('active');
+                
+                // Workerをクリーンアップ
+                try {
+                    await worker.terminate();
+                } catch (e) {
+                    // Workerが既に終了している場合は無視
+                }
             }
         }
 
