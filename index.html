@@ -1327,16 +1327,61 @@
             
             // 入力データをリセット
             inputData = { date: '', store: '', amount: '' };
-            document.getElementById('date-display').textContent = '例: 2024年1月1日、今日、昨日';
+            document.getElementById('date-text').textContent = '未入力';
             document.getElementById('date-display').classList.add('empty');
-            document.getElementById('store-display').textContent = '例: セブンイレブン、コンビニ';
+            document.getElementById('store-text').textContent = '未入力';
             document.getElementById('store-display').classList.add('empty');
-            document.getElementById('amount-display').textContent = '例: 1000円、二千三百円';
+            document.getElementById('amount-text').textContent = '未入力';
             document.getElementById('amount-display').classList.add('empty');
             updateSubmitButton();
 
             showStatus('家計簿に追加しました！', 'success');
-            switchTab('book');
+            
+            // 音声入力タブに戻る（既に音声入力タブの場合は何もしない）
+            const inputTab = document.getElementById('input-tab');
+            if (!inputTab.classList.contains('active')) {
+                switchTab('input');
+            }
+            
+            // 録音中の場合、音声認識を再開（iOS対応）
+            const stopButton = document.getElementById('stop-button');
+            const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
+            if (stopButton && stopButton.style.display !== 'none' && recognition) {
+                // iOSでは少し長めに待ってから再開
+                const delay = isIOS ? 800 : 300;
+                setTimeout(() => {
+                    try {
+                        if (recognition && stopButton.style.display !== 'none') {
+                            // 一度停止してから再開（iOSで確実に動作させるため）
+                            recognition.stop();
+                            setTimeout(() => {
+                                try {
+                                    if (recognition && stopButton.style.display !== 'none') {
+                                        recognition.start();
+                                        console.log('音声認識を再開しました');
+                                    }
+                                } catch (e) {
+                                    console.log('音声認識の再開エラー:', e);
+                                    // エラーが発生した場合、再度試行
+                                    if (e.name !== 'InvalidStateError' && !e.message.includes('already started')) {
+                                        setTimeout(() => {
+                                            try {
+                                                if (recognition && stopButton.style.display !== 'none') {
+                                                    recognition.start();
+                                                }
+                                            } catch (e2) {
+                                                console.log('音声認識の再開リトライエラー:', e2);
+                                            }
+                                        }, 500);
+                                    }
+                                }
+                            }, isIOS ? 300 : 100);
+                        }
+                    } catch (e) {
+                        console.log('音声認識の停止エラー:', e);
+                    }
+                }, delay);
+            }
         }
 
         // レシートリストの更新
